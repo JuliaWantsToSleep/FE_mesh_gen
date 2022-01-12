@@ -1,25 +1,128 @@
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <forward_list>
 #include <list>
 #include <memory>
+#include <random>
 
 #include "EllipsePackingMethod.hpp"
 
-void EllipsePackingMethod::GenInitialPack(const opencascade::handle
-                                          <BSplineSurface> &surface)
+std::optional<double> EllipsePackingMethod::Tangent(const Ellipse &e1,
+                                     double phi1,
+                                     double phi2)
 {
-    //TODO: Как подобрать начальные точки?
-    //    gp_Pnt2d centre(1., 1.);
-    //    gp_Pnt2d O(0., 0.);
-    //    double centre_x = centre.X(), centre_y = centre.Y();
-    //    double dist_O = centre.Distance(O);
-    //    if (_bounds.HavePointIn(centre_x, centre_y))
-    //    {
-    //        SurfaceMetric::EllypticRepr M;
-    //        surface->Metric(centre_x, centre_y, M);
+    for (double psi = phi1; psi < phi2; psi += 0.1)
+    {
+        double x_local = e1.metric_data.lambda*std::cos(psi);
+        double y_local = e1.metric_data.mu*std::sin(psi);
+        if (std::abs(y_local) < 0.1) continue;
 
-    //    }
+        //Из канонического уравнения эллипса: y'=-(a^2/b^2)*(x/y)
+        double dy_local = -(e1.metric_data.mu*e1.metric_data.mu)
+                /(e1.metric_data.lambda*e1.metric_data.lambda)
+                *(x_local/y_local);
+
+        //Обратное преобразование поворота на угол teta + сдвиг
+        double x_global = std::cos(e1.metric_data.teta)*x_local
+                        - std::sin(e1.metric_data.teta)*y_local + e1.C.X();
+        double y_global = std::sin(e1.metric_data.teta)*x_local
+                        + std::cos(e1.metric_data.teta)*y_local + e1.C.Y();
+
+        //Угол наклона касательной в глобальной с.к.
+        double global_angle = std::atan(dy_local) + e1.metric_data.teta;
+        //Чтобы тангенс не обращался в бесконечность
+        if (std::abs(global_angle - M_PI/2.) < 0.1) continue;
+        //Если касательная проходит через точку О, то возвращаем угол наклона
+        if (std::abs(y_global - x_global*tan(global_angle)) < 0.01)
+        {
+            return global_angle;
+        }
+
+    }
+    return std::nullopt;
+}
+
+std::optional<Ellipse> EllipsePackingMethod::EvalC2(const Ellipse &C1)
+{
+    //Ограничиваем дальнейшую область поиска касательными к эллипсу С1 из О
+    //Таких касательных может быть только две
+    auto psi_start = Tangent(C1, 0, M_PI*2.);
+    assert(psi_start);
+    double psi_start_val = psi_start.value();
+
+    auto psi_end = Tangent(C1, psi_start_val, M_PI*2.);
+    assert(psi_end);
+    double psi_end_val = psi_end.value();
+
+    double term_val = _bounds.MaxRadius();
+    double dr = 0.1;
+    SurfaceMetric::EllypticRepr metric;
+    Ellipse C2;
+    for (double r = C1.dist_to_O; r <= term_val; r += dr)
+    {
+        for (double psi = psi_start_val; psi < psi_end_val; psi += 0.1)
+        {
+            double C_x = r*std::cos(psi), C_y = r*std::sin(psi);
+            metric = _surface->Metric(C_x, C_y);
+            C2 = {{C_x, C_y}, r, metric};
+            if (std::abs(EvalProximity(C1, C2) - 1) < 0.01)
+            {
+                return C2;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<Ellipse> EllipsePackingMethod::EvalC1()
+{
+    double r = 0.1, dr = 0.1;
+    double C_x = r, C_y = 0;
+    auto metric = _surface->Metric(C_x, C_y);
+
+    Ellipse C1 {{C_x, C_y}, r, metric};
+    Ellipse O {{0, 0}, 0, {0, 0, 0}};
+
+
+    //Ищем точку C1 на окружности радиуса r
+    //(Эллипс с центром в C1 не должен накладываться на O)
+    for (; r <= EvalH(C1, O); r += dr)
+    {
+        for(double psi = 0.; psi < 2*M_PI; psi += 0.1)
+        {
+            //Координаты
+            C_x = r*std::cos(psi);
+            C_y = r*std::sin(psi);
+            //Метрика
+            metric = _surface->Metric(C_x, C_y);
+            C1 = {{C_x, C_y}, r, metric};
+            if (r <= EvalH(C1, O)) return C1;
+        }
+    }
+
+    return std::nullopt;
+}
+
+void EllipsePackingMethod::GenInitialPack()
+{
+
+        auto C1_opt = EvalC1();
+        //Предположительно первый эллипс должен находиться всегда
+        //Если таковой не найден, значит есть ошибка в коде
+        assert(C1_opt);
+        Ellipse C1 = C1_opt.value();
+        _front.push_front(C1);
+
+        auto C2_opt = EvalC2(C1);
+        assert(C2_opt);
+        Ellipse C2 = C2_opt.value();
+        _front.push_front(C2);
+        _front.emplace_front(FitOne(C1, C2));
+
+//        std::default_random_engine generator;
+//        std::uniform_int_distribution<int> distribution(1,6);
+//        int dice_roll = distribution(generator);
 }
 
 double EllipsePackingMethod::EvalH(const Ellipse &e1, const Ellipse &e2) const
@@ -48,10 +151,11 @@ double EllipsePackingMethod::EvalProximity(const Ellipse &e1,
     return std::min(l, 1/l);
 }
 
-void EllipsePackingMethod::GetInitPoint(gp_Pnt2d& C, const Ellipse& e1,
-                                        const Ellipse& e2)
+std::optional<gp_Pnt2d> EllipsePackingMethod::GetInitPoint(const Ellipse& e1,
+                                                           const Ellipse& e2)
 {
     //TODO
+    return {};
 }
 
 bool EllipsePackingMethod::CheckIntersections(const Ellipse &to_check,
@@ -86,15 +190,22 @@ bool EllipsePackingMethod::CheckIntersections(const Ellipse &to_check,
     return found;
 }
 
-void EllipsePackingMethod::FitOne(Ellipse &to_fit, const Ellipse &C1,
-                                  const Ellipse &C2)
+Ellipse EllipsePackingMethod::FitOne(const Ellipse &C1,
+                                     const Ellipse &C2)
 {
+    using Metric = SurfaceMetric::EllypticRepr;
     //Находим приближение для начальной точки
-    GetInitPoint(to_fit.C, C1, C2);
+    auto init_point_opt = GetInitPoint(C1, C2);
+    assert(init_point_opt);
+    auto init_point = init_point_opt.value();
+
+    Metric metric = _surface->Metric(init_point.X(), init_point.Y());
+    Ellipse to_fit{init_point, init_point.Distance({0,0}), metric};
 
     double proximity_lvl = 0.9, dx = 0.01, dy = 0.01, x, y;
     std::list<int> deltas = {10, 8, 6, 4, 2, 1};
     auto delta_it = deltas.begin();
+    //beta - коэффициент близости двух эллипсов (чем он больше, тем ближе)
     double beta = EvalProximity(C1, to_fit)*EvalProximity(to_fit, C2);
     while(beta < proximity_lvl)
     {
@@ -117,17 +228,18 @@ void EllipsePackingMethod::FitOne(Ellipse &to_fit, const Ellipse &C1,
             ++delta_it;
     }
 
+    return to_fit;
+
 }
 
-void EllipsePackingMethod::FitEllipses(const opencascade::handle
-                                       <BSplineSurface> &surface)
+void EllipsePackingMethod::FitEllipses()
 {
     using Metric = SurfaceMetric::EllypticRepr;
 
-    GenInitialPack(surface);
+    GenInitialPack();
 
     //C1, C2
-    auto C_i_it(_front.begin()),C_j_it(++_front.begin());
+    auto C_i_it{_front.begin()}, C_j_it{std::next(C_i_it)};
 
     gp_Pnt2d C;
 
@@ -135,33 +247,36 @@ void EllipsePackingMethod::FitEllipses(const opencascade::handle
                                std::abs(_bounds.V2 - _bounds.V1)/2);
     while(C_i_it->dist_to_O < term_val)
     {
-        Metric M;
-        surface->Metric(C.X(), C.Y(), M);
-        Ellipse to_fit{C, C.Distance({0,0}), M};
-        FitOne(to_fit, *C_i_it, *C_j_it);
+
+        auto new_packed = FitOne(*C_i_it, *C_j_it);
 
         //Если полученный эллипс пересекается с другими, то выталкиваем его
         //С_i_it, C_j_it при этом меняются
-        while(CheckIntersections(to_fit, C_i_it, C_j_it))
+        while(CheckIntersections(new_packed, C_i_it, C_j_it))
         {
-            FitOne(to_fit, *C_i_it, *C_j_it);
+            new_packed = FitOne(*C_i_it, *C_j_it);
         }
         //Удаляем из фронта генерации элементы, которые перекрывались эллипсом
         //Если C_i и C_j являются соседними, то ничего не удалится
         _front.erase_after(C_i_it, C_j_it);
         //Добавляем эллипс во фронт генерации
-        _front.insert_after(C_i_it, to_fit);
+        _front.insert_after(C_i_it, new_packed);
         // Ищем элемент с минимальнм расстоянием до точки O
         C_i_it = std::min_element(_front.begin(), _front.end(),
                                   [](const Ellipse& lhs, const Ellipse& rhs)
-        {return lhs.dist_to_O < rhs.dist_to_O;});
+                                  {return lhs.dist_to_O < rhs.dist_to_O;});
         C_j_it = std::next(C_i_it);
     }
 
 }
 
-void EllipsePackingMethod::GenMesh(const opencascade::handle
-                                   <BSplineSurface> &surface) const
+void EllipsePackingMethod::SetSurface(std::shared_ptr<BSplineSurface> surface)
 {
+    _surface = surface;
+}
 
+void EllipsePackingMethod::GenMesh(std::shared_ptr<BSplineSurface> surface)
+{
+    SetSurface(surface);
+    FitEllipses();
 }
