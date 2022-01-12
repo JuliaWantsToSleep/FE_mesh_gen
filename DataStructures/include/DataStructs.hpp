@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include <gp_Pnt2d.hxx>
 
 #include "SurfaceMetric.hpp"
@@ -13,6 +15,10 @@ struct SurfaceBounds
     bool HavePointIn(double U, double V)
     {
         return (U <= U2) && (U >= U1) && (V <= V2) && (V >= V1);
+    }
+    double MaxRadius()
+    {
+        return std::min(std::abs(U2 - U1)/2, std::abs(V2 - V1)/2);
     }
 };
 
