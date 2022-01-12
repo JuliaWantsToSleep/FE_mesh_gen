@@ -14,15 +14,15 @@
 
 #include "StepTranslator.hpp"
 
-void StepTranslator::Translate(const std::string& path, std::vector
-                               <std::shared_ptr<BSplineSurface>>& surfaces) const
+void StepTranslator::Translate(std::vector<std::shared_ptr
+                               <BSplineSurface>>& surfaces) const
 {
     STEPControl_Reader reader;
-    IFSelect_ReturnStatus stat = reader.ReadFile(path.c_str());
+    IFSelect_ReturnStatus stat = reader.ReadFile(_path.c_str());
     if (stat != IFSelect_RetDone)
     {
         reader.PrintCheckLoad(true, IFSelect_ItemsByEntity);
-        std::string what = "Error while reading file " + path + "\n";
+        std::string what = "Error while reading file " + _path + "\n";
         throw std::runtime_error(what);
     }
     int roots_num = reader.NbRootsForTransfer();
@@ -35,7 +35,7 @@ void StepTranslator::Translate(const std::string& path, std::vector
     int shapes_num = reader.NbShapes();
     if (shapes_num == 0)
     {
-        std::string what = "STEP file " + path + " has no shapes.\n";
+        std::string what = "STEP file " + _path + " has no shapes.\n";
         throw std::runtime_error(what);
     }
 

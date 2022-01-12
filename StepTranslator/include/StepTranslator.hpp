@@ -1,22 +1,16 @@
 #pragma once
-#include <memory>
-#include <string>
-#include <vector>
-#include "BSplineSurface.hpp"
-
-class AbstractTranslator
-{
-public:
-    virtual ~AbstractTranslator(){}
-    virtual void Translate(const std::string& path, std::vector<std::shared_ptr
-                           <BSplineSurface>>& surfaces) const = 0;
-};
+#include "AbstractTranslator.hpp"
 
 class StepTranslator : public AbstractTranslator
 {
+private:
+    static constexpr char _default_path[] = "default_surface.stp";
 public:
-    void Translate(const std::string& path, std::vector<std::shared_ptr
+    StepTranslator(const std::string& path = _default_path):
+        AbstractTranslator(path){}
+    void Translate(std::vector<std::shared_ptr
                    <BSplineSurface>>& surfaces) const override;
+    static std::string GetDefaultPath(){return _default_path;}
 };
 
 class IgesTranslator : public AbstractTranslator
